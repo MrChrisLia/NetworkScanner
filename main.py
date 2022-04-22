@@ -1,5 +1,8 @@
 #!/bin/bash
 
+import logging
+logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
+
 import scapy.all as scapy
 import socket
 import optparse
@@ -33,6 +36,8 @@ def scan(IP):
         except socket.herror:
             client_dict = {"IP": element[1].psrc, "MAC": element[1].hwsrc, "hostname": "Unknown host"}  # dictionary of keys IP and MAC
             clients_list.append(client_dict)
+
+
     return clients_list  # List of dictionaries
 
 
@@ -47,4 +52,3 @@ def print_scan_results(results_list):
 options = get_arguments()
 scan_result = scan(options.ip)  # clients_list data from CLI
 print_scan_results(scan_result)
-
