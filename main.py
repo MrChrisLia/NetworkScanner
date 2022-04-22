@@ -7,12 +7,6 @@ import scapy.all as scapy
 import socket
 import optparse
 
-# Use scapy.ls(scapy.method_name_here()) to find a list of fields to set for the method
-# Example scape.ls(scapy.Ether()) to find the fields for scapy.Ether()
-# Use .show() to show the details of the frames/packets
-# hwsrc = mac address (hardware source)
-# psrc = source port
-
 
 def get_arguments():
     parser = optparse.OptionParser()
@@ -31,13 +25,11 @@ def scan(IP):
     for element in answered_list:
         try:
             hostname = socket.gethostbyaddr(element[1].psrc)
-            client_dict = {"IP": element[1].psrc, "MAC": element[1].hwsrc, "hostname": hostname[0]}  # dictionary of keys IP and MAC
+            client_dict = {"IP": element[1].psrc, "MAC": element[1].hwsrc, "hostname": hostname[0]}
             clients_list.append(client_dict)  # Populate the dictionary
         except socket.herror:
-            client_dict = {"IP": element[1].psrc, "MAC": element[1].hwsrc, "hostname": "Unknown host"}  # dictionary of keys IP and MAC
+            client_dict = {"IP": element[1].psrc, "MAC": element[1].hwsrc, "hostname": "Unknown host"}
             clients_list.append(client_dict)
-
-
     return clients_list  # List of dictionaries
 
 
