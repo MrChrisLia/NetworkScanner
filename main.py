@@ -6,6 +6,7 @@ logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 import scapy.all as scapy
 import socket
 import optparse
+import requests
 
 
 def get_arguments():
@@ -28,17 +29,23 @@ def scan_ip(IP):
             hostname = socket.gethostbyaddr(element[1].psrc)[0]
         except socket.herror:
             hostname = "Unknown Host"
-        client_dict = {"IP": element[1].psrc, "MAC": element[1].hwsrc, "HOSTNAME": hostname}
+        try:
+            MAC_URL = 'http://macvendors.co/api/%s'
+            r = requests.get(MAC_URL % str(element[1].hwsrc))
+            vendor = str(r.json()["result"]['company'])
+        except:
+            vendor = "Unknown Vendor"
+        client_dict = {"IP": element[1].psrc, "MAC": element[1].hwsrc, "HOSTNAME": hostname, "VENDOR": vendor}
         clients_list.append(client_dict)  # Populate the dictionary
     return clients_list  # List of dictionaries
 
 
 def print_scan_results(results_list):
     print("Results of " + str(results_list[0]) + " scan:")  # The 0 index is the IP scanned
-    print("IP\t\t\t MAC ADDRESS\t\t\t HOSTNAME \t\t")
-    print("----------------------------------------------------------------------")
+    print("IP\t\t\t MAC ADDRESS\t\t\t HOSTNAME \t\t\t VENDOR")
+    print("-----------------------------------------------------------------------------------------------------")
     for client in results_list[1:]:
-        print(client["IP"] + "\t\t" + client["MAC"] + "\t\t" + client["HOSTNAME"])
+        print(client["IP"] + "\t\t" + client["MAC"] + "\t\t" + client["HOSTNAME"] + "\t\t\t" + client["VENDOR"])
 
 
 options = get_arguments()
