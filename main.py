@@ -15,21 +15,21 @@ def get_arguments():
     return options
 
 
-def scan(IP):
+def scan_ip(IP):
+    print("Scanning " + str(IP))
     arp_request = scapy.ARP(pdst=IP)  # ARP request to find who has the Destination IP
     broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")  # Flood the network by configuring the request to 6 ff
     arp_request_broadcast = broadcast/arp_request  # Custom packet we created. Ether/ARP
-    answered_list = scapy.srp(arp_request_broadcast, timeout=3, verbose=False)[0]
+    answered_list = scapy.srp(arp_request_broadcast, timeout=1, verbose=False)[0]
 
     clients_list = [str(IP)]
     for element in answered_list:
         try:
-            hostname = socket.gethostbyaddr(element[1].psrc)
-            client_dict = {"IP": element[1].psrc, "MAC": element[1].hwsrc, "hostname": hostname[0]}
-            clients_list.append(client_dict)  # Populate the dictionary
+            hostname = socket.gethostbyaddr(element[1].psrc)[0]
         except socket.herror:
-            client_dict = {"IP": element[1].psrc, "MAC": element[1].hwsrc, "hostname": "Unknown host"}
-            clients_list.append(client_dict)
+            hostname = "Unknown Host"
+        client_dict = {"IP": element[1].psrc, "MAC": element[1].hwsrc, "HOSTNAME": hostname}
+        clients_list.append(client_dict)  # Populate the dictionary
     return clients_list  # List of dictionaries
 
 
@@ -38,9 +38,9 @@ def print_scan_results(results_list):
     print("IP\t\t\t MAC ADDRESS\t\t\t HOSTNAME \t\t")
     print("----------------------------------------------------------------------")
     for client in results_list[1:]:
-        print(client["IP"] + "\t\t" + client["MAC"] + "\t\t" + str(client["hostname"]))
+        print(client["IP"] + "\t\t" + client["MAC"] + "\t\t" + client["HOSTNAME"])
 
 
 options = get_arguments()
-scan_result = scan(options.ip)  # clients_list data from CLI
+scan_result = scan_ip(options.ip)  # clients_list data from CLI
 print_scan_results(scan_result)
