@@ -6,13 +6,13 @@ logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 from tabulate import tabulate
 import scapy.all as scapy
 import socket
-import optparse
+import argparse
 import requests
 
 
 def get_arguments():
-    parser = optparse.OptionParser()
-    parser.add_option("-i", "--ip", dest="ip", help="Target IP / IP range.")
+    parser = argparse.ArgumentParser()
+    parser.add_option("-i", "--ip", dest="ip", help="Target IP / Subnet")
     options, arguments = parser.parse_args()
     return options
 
@@ -47,6 +47,7 @@ def print_scan_results(results_list):
     print(tabulate(data, headers={"": data[1:]}))
 
 
-options = get_arguments()
-scan_result = scan_ip(options.ip)  # clients_list data from CLI
-print_scan_results(scan_result)
+if __name__=="__main__":
+    options = get_arguments()
+    scan_result = scan_ip(options.ip)  # clients_list data from CLI
+    print_scan_results(scan_result)
