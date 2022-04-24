@@ -12,9 +12,9 @@ import requests
 
 def get_arguments():
     parser = argparse.ArgumentParser()
-    parser.add_option("-i", "--ip", dest="ip", help="Target IP / Subnet")
-    options, arguments = parser.parse_args()
-    return options
+    parser.add_argument("-i", "--ip", dest="ip", help="Target IP / Subnet")
+    arguments = parser.parse_args()
+    return arguments
 
 
 def scan_ip(IP):
@@ -47,7 +47,7 @@ def print_scan_results(results_list):
     print(tabulate(data, headers={"": data[1:]}))
 
 
-if __name__=="__main__":
-    options = get_arguments()
-    scan_result = scan_ip(options.ip)  # clients_list data from CLI
+if __name__ == "__main__":
+    arguments = get_arguments()
+    scan_result = scan_ip(arguments.ip)  # clients_list data from CLI
     print_scan_results(scan_result)
