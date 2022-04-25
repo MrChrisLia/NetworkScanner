@@ -44,7 +44,7 @@ def scan_ip(IP):
 def print_scan_results(results_list):
     print("Results of " + str(results_list[0]) + " scan:")  # The 0 index is the IP scanned
     data = results_list[1:]
-    print(tabulate(data, headers={"": data[1:]}))
+    print(tabulate(data, headers={"foo": data[1:]}))
 
 
 if __name__ == "__main__":
