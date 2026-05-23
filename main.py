@@ -194,7 +194,14 @@ def resolve_hostname(ip):
     return "N/A"
 
 
+def is_randomized_mac(mac):
+    # The locally administered bit (bit 1 of the first byte) is set on randomized MACs
+    return bool(int(mac.split(":")[0], 16) & 0x02)
+
+
 def get_mac_vendor(mac):
+    if is_randomized_mac(mac):
+        return "Private (randomized)"
     try:
         r = requests.get(f"https://api.macvendors.com/{mac}", timeout=3)
         if r.status_code == 200:
