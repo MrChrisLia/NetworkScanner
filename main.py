@@ -15,7 +15,6 @@ from datetime import datetime
 WINDOWS = platform.system() == "Windows"
 
 import requests
-from tabulate import tabulate
 
 
 COMMON_PORTS = {
@@ -173,6 +172,22 @@ def enrich_device(ip, mac, do_ports, threads):
     return device
 
 
+COLS = [("IP", 16), ("MAC", 18), ("Hostname", 28), ("Vendor", 24)]
+PORT_COL = ("Open Ports", 36)
+
+
+def _cols(do_ports):
+    return COLS + ([PORT_COL] if do_ports else [])
+
+
+def _separator(do_ports):
+    return "  ".join("─" * w for _, w in _cols(do_ports))
+
+
+def _row(device, do_ports):
+    return "  ".join(str(device.get(k, "")).ljust(w) for k, w in _cols(do_ports))
+
+
 def run_scan(subnet, do_ports, threads):
     print(f"Scanning {subnet} ...")
     hosts = arp_scan(subnet, threads)
@@ -181,7 +196,14 @@ def run_scan(subnet, do_ports, threads):
         print("No devices found.")
         return []
 
-    print(f"Found {len(hosts)} device(s). Gathering details ...")
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"\nFound {len(hosts)} device(s) — {subnet}  {ts}\n")
+
+    sep = _separator(do_ports)
+    header = "  ".join(k.ljust(w) for k, w in _cols(do_ports))
+    print(sep)
+    print(header)
+    print(sep)
 
     devices = []
     with ThreadPoolExecutor(max_workers=min(len(hosts), 20)) as executor:
@@ -190,20 +212,13 @@ def run_scan(subnet, do_ports, threads):
             for ip, mac in hosts
         }
         for future in as_completed(futures):
-            devices.append(future.result())
+            device = future.result()
+            devices.append(device)
+            print(_row(device, do_ports))
 
-    devices.sort(key=lambda d: ipaddress.ip_address(d["IP"]))
-    return devices
-
-
-def print_results(subnet, devices):
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"\n{subnet} — {ts}\n")
-    if not devices:
-        print("No devices found.")
-        return
-    print(tabulate(devices, headers="keys", tablefmt="rounded_outline"))
+    print(sep)
     print(f"\nTotal: {len(devices)} device(s)")
+    return sorted(devices, key=lambda d: ipaddress.ip_address(d["IP"]))
 
 
 def save_results(devices, path):
@@ -233,7 +248,6 @@ if __name__ == "__main__":
         print(f"Auto-detected subnet: {subnet}")
 
     devices = run_scan(subnet, args.ports, args.threads)
-    print_results(subnet, devices)
 
     if args.output and devices:
         save_results(devices, args.output)
