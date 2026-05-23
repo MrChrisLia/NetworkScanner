@@ -1,53 +1,230 @@
 #!/usr/bin/env python3
 
-import logging
-logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
-
-from tabulate import tabulate
-import scapy.all as scapy
-import socket
 import argparse
+import csv
+import ipaddress
+import json
+import socket
+import subprocess
+import re
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+
 import requests
+from tabulate import tabulate
+
+
+COMMON_PORTS = {
+    21: "FTP",
+    22: "SSH",
+    23: "Telnet",
+    25: "SMTP",
+    53: "DNS",
+    80: "HTTP",
+    110: "POP3",
+    135: "MSRPC",
+    139: "NetBIOS",
+    143: "IMAP",
+    443: "HTTPS",
+    445: "SMB",
+    3389: "RDP",
+    5900: "VNC",
+    8080: "HTTP-Alt",
+    8443: "HTTPS-Alt",
+}
 
 
 def get_arguments():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-i", "--ip", dest="ip", help="Target IP / Subnet")
-    arguments = parser.parse_args()
-    return arguments
+    parser = argparse.ArgumentParser(
+        description="Network scanner — discovers devices on your local network"
+    )
+    parser.add_argument(
+        "-i", "--ip", dest="ip",
+        help="Target subnet in CIDR notation (e.g. 192.168.1.0/24). "
+             "Auto-detects local /24 if omitted.",
+    )
+    parser.add_argument(
+        "-p", "--ports", dest="ports", action="store_true",
+        help="Scan common ports on each discovered device",
+    )
+    parser.add_argument(
+        "-o", "--output", dest="output",
+        help="Save results to a file — supports .json and .csv",
+    )
+    parser.add_argument(
+        "--threads", dest="threads", type=int, default=200,
+        help="Worker threads for ping sweep and port scanning (default: 200)",
+    )
+    return parser.parse_args()
 
 
-def scan_ip(IP):
-    print("Scanning " + str(IP))
-    arp_request = scapy.ARP(pdst=IP)  # ARP request to find who has the Destination IP
-    broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")  # Flood the network by configuring the request to 6 ff
-    arp_request_broadcast = broadcast/arp_request  # Custom packet we created. Ether/ARP
-    answered_list = scapy.srp(arp_request_broadcast, timeout=3, verbose=False)[0]
+def auto_detect_subnet():
+    # Route a dummy UDP socket to discover which local IP the OS would use.
+    # No packets are actually sent.
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+        return str(ipaddress.ip_interface(f"{local_ip}/24").network)
+    except Exception:
+        return None
 
-    clients_list = [str(IP)]
-    for element in answered_list:
+
+def ping_host(ip):
+    # Fire-and-forget ping — we only care that it triggers ARP resolution.
+    try:
+        subprocess.run(
+            ["ping", "-c", "1", str(ip)],
+            capture_output=True,
+            timeout=2,
+        )
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def normalize_mac(mac):
+    return ":".join(part.zfill(2) for part in mac.split(":"))
+
+
+def read_arp_table(network):
+    result = subprocess.run(["arp", "-a"], capture_output=True, text=True)
+    devices, seen = [], set()
+    for line in result.stdout.splitlines():
+        # macOS format: hostname (ip) at mac on iface ...
+        match = re.search(r'\((\d+\.\d+\.\d+\.\d+)\) at ([0-9a-f:]+) on', line)
+        if not match:
+            continue
+        ip, raw_mac = match.groups()
+        if ip in seen or len(raw_mac) < 11:  # skip "(incomplete)" entries
+            continue
         try:
-            hostname = socket.gethostbyaddr(element[1].psrc)[0]  # Find the hostname
-        except socket.herror:
-            hostname = "Unknown Host"
-        try:
-            mac_url = "http://macvendors.co/api/%s"  # Uses Macvendor's API to find the vendor
-            r = requests.get(mac_url % str(element[1].hwsrc))
-            vendor = str(r.json()["result"]["company"])
-        except:
-            vendor = "Unknown Vendor"
-        client_dict = {"IP": element[1].psrc, "MAC": element[1].hwsrc, "HOSTNAME": hostname, "VENDOR": vendor}
-        clients_list.append(client_dict)  # Populate the dictionary
-    return clients_list  # List of dictionaries
+            if ipaddress.ip_address(ip) in network:
+                devices.append((ip, normalize_mac(raw_mac)))
+                seen.add(ip)
+        except ValueError:
+            pass
+    return devices
 
 
-def print_scan_results(results_list):
-    print("Results of " + str(results_list[0]) + " scan:")  # The 0 index is the IP scanned
-    data = results_list[1:]
-    print(tabulate(data, headers={"foo": data[1:]}))
+def arp_scan(subnet, threads):
+    network = ipaddress.ip_network(subnet, strict=False)
+    hosts = list(network.hosts())
+    with ThreadPoolExecutor(max_workers=threads) as executor:
+        executor.map(ping_host, hosts)
+    return read_arp_table(network)
+
+
+def resolve_hostname(ip):
+    try:
+        return socket.gethostbyaddr(ip)[0]
+    except socket.herror:
+        return "N/A"
+
+
+def get_mac_vendor(mac):
+    try:
+        r = requests.get(f"https://api.macvendors.com/{mac}", timeout=3)
+        if r.status_code == 200:
+            return r.text.strip()
+    except Exception:
+        pass
+    return "Unknown"
+
+
+def check_port(ip, port, timeout=0.5):
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(timeout)
+            return port if s.connect_ex((ip, port)) == 0 else None
+    except Exception:
+        return None
+
+
+def scan_ports(ip, threads):
+    open_ports = []
+    with ThreadPoolExecutor(max_workers=threads) as executor:
+        futures = {executor.submit(check_port, ip, port): port for port in COMMON_PORTS}
+        for future in as_completed(futures):
+            result = future.result()
+            if result is not None:
+                open_ports.append(result)
+    return sorted(open_ports)
+
+
+def enrich_device(ip, mac, do_ports, threads):
+    hostname = resolve_hostname(ip)
+    vendor = get_mac_vendor(mac)
+    device = {"IP": ip, "MAC": mac, "Hostname": hostname, "Vendor": vendor}
+    if do_ports:
+        ports = scan_ports(ip, threads)
+        device["Open Ports"] = (
+            ", ".join(f"{p}/{COMMON_PORTS[p]}" for p in ports) if ports else "None"
+        )
+    return device
+
+
+def run_scan(subnet, do_ports, threads):
+    print(f"Scanning {subnet} ...")
+    hosts = arp_scan(subnet, threads)
+
+    if not hosts:
+        print("No devices found.")
+        return []
+
+    print(f"Found {len(hosts)} device(s). Gathering details ...")
+
+    devices = []
+    with ThreadPoolExecutor(max_workers=min(len(hosts), 20)) as executor:
+        futures = {
+            executor.submit(enrich_device, ip, mac, do_ports, threads): ip
+            for ip, mac in hosts
+        }
+        for future in as_completed(futures):
+            devices.append(future.result())
+
+    devices.sort(key=lambda d: ipaddress.ip_address(d["IP"]))
+    return devices
+
+
+def print_results(subnet, devices):
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"\n{subnet} — {ts}\n")
+    if not devices:
+        print("No devices found.")
+        return
+    print(tabulate(devices, headers="keys", tablefmt="rounded_outline"))
+    print(f"\nTotal: {len(devices)} device(s)")
+
+
+def save_results(devices, path):
+    if path.endswith(".json"):
+        with open(path, "w") as f:
+            json.dump(devices, f, indent=2)
+        print(f"Saved to {path}")
+    elif path.endswith(".csv"):
+        with open(path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=devices[0].keys())
+            writer.writeheader()
+            writer.writerows(devices)
+        print(f"Saved to {path}")
+    else:
+        print(f"Unknown format for '{path}' — use .json or .csv")
 
 
 if __name__ == "__main__":
-    arguments = get_arguments()
-    scan_result = scan_ip(arguments.ip)  # clients_list data from CLI
-    print_scan_results(scan_result)
+    args = get_arguments()
+
+    subnet = args.ip
+    if not subnet:
+        subnet = auto_detect_subnet()
+        if not subnet:
+            print("Could not detect local subnet. Use -i to specify one.")
+            sys.exit(1)
+        print(f"Auto-detected subnet: {subnet}")
+
+    devices = run_scan(subnet, args.ports, args.threads)
+    print_results(subnet, devices)
+
+    if args.output and devices:
+        save_results(devices, args.output)
