@@ -9,6 +9,7 @@ import socket
 import subprocess
 import re
 import sys
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
@@ -115,12 +116,37 @@ def read_arp_table(network):
     return devices
 
 
+def get_self():
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+        mac_int = uuid.getnode()
+        mac = ":".join(f"{(mac_int >> (40 - i * 8)) & 0xff:02x}" for i in range(6))
+        return local_ip, mac
+    except Exception:
+        return None
+
+
 def arp_scan(subnet, threads):
     network = ipaddress.ip_network(subnet, strict=False)
     hosts = list(network.hosts())
     with ThreadPoolExecutor(max_workers=threads) as executor:
         executor.map(ping_host, hosts)
-    return read_arp_table(network)
+    devices = read_arp_table(network)
+
+    # arp -a never lists the local machine — add it manually
+    self_info = get_self()
+    if self_info:
+        self_ip, self_mac = self_info
+        known = {ip for ip, _ in devices}
+        try:
+            if ipaddress.ip_address(self_ip) in network and self_ip not in known:
+                devices.append((self_ip, self_mac))
+        except ValueError:
+            pass
+
+    return devices
 
 
 def resolve_hostname(ip):
