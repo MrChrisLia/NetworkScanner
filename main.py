@@ -4,12 +4,15 @@ import argparse
 import csv
 import ipaddress
 import json
+import platform
 import socket
 import subprocess
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+
+WINDOWS = platform.system() == "Windows"
 
 import requests
 from tabulate import tabulate
@@ -73,9 +76,10 @@ def auto_detect_subnet():
 
 def ping_host(ip):
     # Fire-and-forget ping — we only care that it triggers ARP resolution.
+    flag = "-n" if WINDOWS else "-c"
     try:
         subprocess.run(
-            ["ping", "-c", "1", str(ip)],
+            ["ping", flag, "1", str(ip)],
             capture_output=True,
             timeout=2,
         )
@@ -84,19 +88,24 @@ def ping_host(ip):
 
 
 def normalize_mac(mac):
-    return ":".join(part.zfill(2) for part in mac.split(":"))
+    sep = "-" if "-" in mac else ":"
+    return ":".join(part.zfill(2) for part in mac.split(sep))
 
 
 def read_arp_table(network):
     result = subprocess.run(["arp", "-a"], capture_output=True, text=True)
     devices, seen = [], set()
     for line in result.stdout.splitlines():
-        # macOS format: hostname (ip) at mac on iface ...
-        match = re.search(r'\((\d+\.\d+\.\d+\.\d+)\) at ([0-9a-f:]+) on', line)
+        if WINDOWS:
+            # Windows format: "  192.168.1.1          aa-bb-cc-dd-ee-ff     dynamic"
+            match = re.search(r'(\d+\.\d+\.\d+\.\d+)\s+([0-9a-f]{2}(?:-[0-9a-f]{2}){5})', line)
+        else:
+            # macOS/Linux format: "hostname (ip) at mac on iface ..."
+            match = re.search(r'\((\d+\.\d+\.\d+\.\d+)\) at ([0-9a-f:]+) on', line)
         if not match:
             continue
         ip, raw_mac = match.groups()
-        if ip in seen or len(raw_mac) < 11:  # skip "(incomplete)" entries
+        if ip in seen or len(raw_mac) < 11:  # skip incomplete entries
             continue
         try:
             if ipaddress.ip_address(ip) in network:
