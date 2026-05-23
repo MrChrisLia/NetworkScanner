@@ -116,14 +116,45 @@ def read_arp_table(network):
     return devices
 
 
+def get_self_mac():
+    """Read the MAC from the active network interface rather than uuid.getnode(),
+    which often returns a Bluetooth or secondary adapter MAC on macOS."""
+    system = platform.system()
+    if system == "Darwin":
+        for iface in ("en0", "en1"):
+            try:
+                out = subprocess.run(
+                    ["ifconfig", iface], capture_output=True, text=True
+                ).stdout
+                m = re.search(r"ether ([0-9a-f:]{17})", out)
+                if m:
+                    return m.group(1)
+            except Exception:
+                pass
+    elif system == "Linux":
+        try:
+            out = subprocess.run(
+                ["ip", "-o", "link", "show", "up"], capture_output=True, text=True
+            ).stdout
+            for line in out.splitlines():
+                if "loopback" in line or "LOOPBACK" in line:
+                    continue
+                m = re.search(r"link/ether ([0-9a-f:]{17})", line)
+                if m:
+                    return m.group(1)
+        except Exception:
+            pass
+    # Universal fallback
+    mac_int = uuid.getnode()
+    return ":".join(f"{(mac_int >> (40 - i * 8)) & 0xff:02x}" for i in range(6))
+
+
 def get_self():
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("8.8.8.8", 80))
             local_ip = s.getsockname()[0]
-        mac_int = uuid.getnode()
-        mac = ":".join(f"{(mac_int >> (40 - i * 8)) & 0xff:02x}" for i in range(6))
-        return local_ip, mac
+        return local_ip, get_self_mac()
     except Exception:
         return None
 
@@ -152,8 +183,15 @@ def arp_scan(subnet, threads):
 def resolve_hostname(ip):
     try:
         return socket.gethostbyaddr(ip)[0]
-    except socket.herror:
-        return "N/A"
+    except (socket.herror, socket.gaierror):
+        pass
+    # gethostbyaddr fails for the local machine on isolated networks
+    try:
+        if ip == socket.gethostbyname(socket.gethostname()):
+            return socket.gethostname()
+    except Exception:
+        pass
+    return "N/A"
 
 
 def get_mac_vendor(mac):
